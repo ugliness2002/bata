@@ -94,8 +94,8 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
         String host = props.getProperty("db.host", "100.125.11.72");
         String port = props.getProperty("db.port", "5432");
         String name = props.getProperty("db.name", "batmud");
-        String user = props.getProperty("db.user", "postgres");
-        String pass = props.getProperty("db.pass", "Louise123");
+        String user = props.getProperty("db.user", "batmud_remote");
+        String pass = props.getProperty("db.pass", "batmud2024remote");
 
         return String.format("jdbc:postgresql://%s:%s/%s?user=%s&password=%s",
             host, port, name, user, pass);
