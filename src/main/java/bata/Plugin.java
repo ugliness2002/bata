@@ -31,44 +31,14 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
 
     @Override
     public void loadPlugin() {
-        try {
-            Class.forName("org.postgresql.Driver");
-
-            String dbUrl = getDbUrl();
-            this.debug("DB: " + dbUrl.replaceAll("password=[^&]*", "password=***"));
-
-            // Try connecting with short timeout, don't block game startup
-            this.jdbi = Jdbi.create(dbUrl);
-            this.roomDao = new RoomDao(jdbi);
-            this.mobDao = new MobDao(jdbi);
-            this.mobRecorder = new MobRecorder(mobDao);
-            this.logImporter = new LogImporter(roomDao, mobDao);
-
-            // Try init in background-like fashion: if it fails, plugin still works
-            try {
-                this.initDb();
-                this.dbReady.set(true);
-                this.debug("Database ready.");
-            } catch (Exception e) {
-                this.debug("DB init failed (will retry): " + e.getMessage());
-            }
-        } catch (Exception e) {
-            this.debug("DB connection failed: " + e.getMessage());
-            // Plugin still loads — just won't persist data
-            this.jdbi = null;
-        }
-
-        // Always register listeners so game works
+        // Register listeners IMMEDIATELY — don't block game startup
         this.onRoomChange = room -> {
             if (room != null && dbReady.get() && jdbi != null) {
                 try {
                     roomDao.upsertRoom(room);
-                    String description = room.getDescription();
-                    if (description != null && !description.isEmpty()) {
-                        Room.WhereamiResult w = Room.parseWhereami(description);
-                        if (w != null) {
-                            this.debug("Whereami: " + w.continent + " (" + w.x + "," + w.y + ")");
-                        }
+                    Room.WhereamiResult w = Room.parseWhereami(room.getDescription());
+                    if (w != null) {
+                        this.debug("Whereami: " + w.continent + " (" + w.x + "," + w.y + ")");
                     }
                     mobRecorder.recordMobs(room.getDescription(), room);
                 } catch (Exception ignored) {}
@@ -78,7 +48,30 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
         this.roomRecorder = new RoomRecorder(this.onRoomChange);
         this.getPluginManager().addProtocolListener(this.roomRecorder);
 
-        this.debug("Bata loaded" + (dbReady.get() ? " (with DB)." : " (no DB)."));
+        this.debug("Bata loaded.");
+
+        // DB connection in background thread — never blocks game
+        new Thread(this::connectDb, "Bata-DB-Init").start();
+    }
+
+    private void connectDb() {
+        try {
+            Class.forName("org.postgresql.Driver");
+            String dbUrl = getDbUrl();
+            this.debug("DB: " + dbUrl.replaceAll("password=[^&]*", "password=***"));
+
+            this.jdbi = Jdbi.create(dbUrl);
+            this.roomDao = new RoomDao(jdbi);
+            this.mobDao = new MobDao(jdbi);
+            this.mobRecorder = new MobRecorder(mobDao);
+            this.logImporter = new LogImporter(roomDao, mobDao);
+
+            this.initDb();
+            this.dbReady.set(true);
+            this.debug("Database ready.");
+        } catch (Exception e) {
+            this.debug("DB failed: " + e.getMessage());
+        }
     }
 
     private String getDbUrl() {
@@ -99,33 +92,25 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
         String name = props.getProperty("db.name", "batmud");
         String user = props.getProperty("db.user", "batmud_remote");
         String pass = props.getProperty("db.pass", "batmud2024remote");
-        // Add connection timeout so game startup isn't blocked
         return String.format("jdbc:postgresql://%s:%s/%s?user=%s&password=%s&connectTimeout=5&loginTimeout=5",
             host, port, name, user, pass);
     }
 
     @Override
-    public String getName() {
-        return "Bata";
-    }
+    public String getName() { return "Bata"; }
 
     @Override
-    public ParsedResult trigger(ParsedResult parsedResult) {
-        return null;
-    }
+    public ParsedResult trigger(ParsedResult parsedResult) { return null; }
 
     @Override
     public String trigger(String input) {
         if (input.startsWith("?room ")) {
-            String searchFor = input.substring(6).trim();
-            if (searchFor.isEmpty() || !dbReady.get()) return "shrug";
-
-            List<Map<String, String>> found = roomDao.searchByShort(searchFor);
+            String s = input.substring(6).trim();
+            if (s.isEmpty() || !dbReady.get()) return "shrug";
+            List<Map<String, String>> found = roomDao.searchByShort(s);
             if (found.isEmpty()) return "shrug";
-
             found.forEach(row -> {
-                String name = row.get("name");
-                String area = row.get("area");
+                String name = row.get("name"), area = row.get("area");
                 String continent = row.get("continent");
                 String x = row.get("x"), y = row.get("y");
                 String exits = row.get("exits");
@@ -141,24 +126,19 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             });
             return "";
         }
-
         if (input.startsWith("?mob ")) {
-            String searchFor = input.substring(5).trim();
-            if (searchFor.isEmpty() || !dbReady.get()) return "shrug";
-
-            List<Map<String, String>> found = mobDao.searchByShort(searchFor);
+            String s = input.substring(5).trim();
+            if (s.isEmpty() || !dbReady.get()) return "shrug";
+            List<Map<String, String>> found = mobDao.searchByShort(s);
             if (found.isEmpty()) return "shrug";
-
             found.forEach(row -> {
-                String longName = row.get("long_name");
-                String aggro = row.get("is_aggro");
-                String roomName = row.get("room_name");
-                String area = row.get("area");
+                String n = row.get("long_name"), aggro = row.get("is_aggro");
+                String rn = row.get("room_name"), area = row.get("area");
                 String color = "1".equals(aggro) ? "[红]" : "[绿]";
                 StringBuilder sb = new StringBuilder();
-                sb.append(String.format("- %s %s", longName, color));
-                if (roomName != null && !roomName.isEmpty()) {
-                    sb.append(String.format(" @ %s", roomName));
+                sb.append(String.format("- %s %s", n, color));
+                if (rn != null && !rn.isEmpty()) {
+                    sb.append(String.format(" @ %s", rn));
                     if (area != null && !area.isEmpty()) sb.append(String.format(" (%s)", area));
                 }
                 sb.append("\n");
@@ -166,7 +146,6 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             });
             return "";
         }
-
         if (input.startsWith("?import ")) {
             String path = input.substring(8).trim();
             if (path.isEmpty() || !dbReady.get()) return "shrug";
@@ -180,28 +159,18 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             }
             return "";
         }
-
         return null;
     }
 
     private void initDb() {
         this.jdbi.withHandle(handle -> {
             handle.execute("CREATE TABLE IF NOT EXISTS rooms (\n" +
-                    "    id TEXT PRIMARY KEY,\n" +
-                    "    area TEXT,\n" +
-                    "    name TEXT,\n" +
-                    "    description TEXT,\n" +
-                    "    exits TEXT,\n" +
-                    "    last_move_dir TEXT,\n" +
-                    "    is_indoor BOOLEAN DEFAULT FALSE,\n" +
-                    "    continent TEXT,\n" +
-                    "    x INTEGER DEFAULT 0,\n" +
-                    "    y INTEGER DEFAULT 0\n" +
+                    "    id TEXT PRIMARY KEY, area TEXT, name TEXT, description TEXT,\n" +
+                    "    exits TEXT, last_move_dir TEXT, is_indoor BOOLEAN DEFAULT FALSE,\n" +
+                    "    continent TEXT, x INTEGER DEFAULT 0, y INTEGER DEFAULT 0\n" +
                     ")");
             handle.execute("CREATE TABLE IF NOT EXISTS mobs (\n" +
-                    "    id TEXT,\n" +
-                    "    long_name TEXT,\n" +
-                    "    is_aggro INTEGER DEFAULT 0,\n" +
+                    "    id TEXT, long_name TEXT, is_aggro INTEGER DEFAULT 0,\n" +
                     "    PRIMARY KEY (id, long_name)\n" +
                     ")");
             return null;
