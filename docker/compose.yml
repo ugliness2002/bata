@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres
+    restart: always
+    shm_size: 512mb
+    environment:
+      POSTGRES_PASSWORD: nuke
+    volumes:
+      - ./data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d
+    ports:
+      - 54433:5432

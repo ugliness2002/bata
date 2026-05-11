@@ -1,0 +1,21 @@
+# Maven build output
+target/
+ECHO 处于关闭状态。
+# IDE
+.idea/
+*.iml
+ECHO 处于关闭状态。
+# Temp build scripts
+build.bat
+package.bat
+git_push.bat
+ECHO 处于关闭状态。
+# Test scratch files
+test_mob_regex.*
+ECHO 处于关闭状态。
+# OS files
+.DS_Store
+._*
+ECHO 处于关闭状态。
+# Maven
+dependency-reduced-pom.xml
