@@ -1,37 +1,20 @@
 package bata.model;
 
 public class Mob {
-    private String id; // 房间id
-    private String longName;
-    private boolean isAggro;
+    private String id, roomId, area;
+    private String name;
+    private boolean aggressive;
 
-    public Mob(String id, String longName, boolean isAggro) {
-        this.id = id;
-        this.longName = longName;
-        this.isAggro = isAggro;
+    public Mob(String roomId, String name, boolean aggressive) {
+        this.roomId = roomId;
+        this.name = name;
+        this.aggressive = aggressive;
     }
 
-    public String getId() {
-        return id;
-    }
+    public String getId() { return id; }
+    public String getRoomId() { return roomId; }
+    public String getLongName() { return name; }
+    public boolean isAggro() { return aggressive; }
 
-    public String getLongName() {
-        return longName;
-    }
-
-    public boolean isAggro() {
-        return isAggro;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public void setLongName(String longName) {
-        this.longName = longName;
-    }
-
-    public void setAggro(boolean aggro) {
-        isAggro = aggro;
-    }
+    public void setId(String id) { this.id = id; }
 }
