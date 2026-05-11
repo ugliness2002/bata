@@ -6,21 +6,20 @@ import bata.protocol.RoomRecorder;
 import bata.protocol.MobRecorder;
 import bata.protocol.LogImporter;
 import bata.dao.MobDao;
-import bata.model.Mob;
 import com.mythicscape.batclient.interfaces.*;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.sqlite3.SQLitePlugin;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
 public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, BatClientPluginCommandTrigger  {
+    // PostgreSQL connection — matches docker/compose.yml
+    private static final String PG_URL = "jdbc:postgresql://localhost:54433/bata";
+    private static final String PG_USER = "bata";
+    private static final String PG_PASS = "bata";
+
     private RoomRecorder roomRecorder;
-    private BatWindow gui;
     private Consumer<Room> onRoomChange;
     private Jdbi jdbi;
     private RoomDao roomDao;
@@ -32,14 +31,9 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
     @Override
     public void loadPlugin() {
         try {
-            Class.forName("org.sqlite.JDBC");
+            this.debug("Connecting to PostgreSQL: " + PG_URL);
 
-            this.debug(System.getProperty("java.io.tmpdir"));
-            String dbFile = String.format("jdbc:sqlite:%s", getSqliteDbFile());
-
-            this.jdbi = Jdbi
-                    .create(dbFile)
-                    .installPlugin(new SQLitePlugin());
+            this.jdbi = Jdbi.create(PG_URL, PG_USER, PG_PASS);
             this.roomDao = new RoomDao(jdbi);
             this.mobDao = new MobDao(jdbi);
             this.mobRecorder = new MobRecorder(mobDao);
@@ -53,12 +47,9 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
                     this.debug("Room changed: " + room.getName());
                     String description = room.getDescription();
                     if (description != null && !description.isEmpty()) {
-                        this.debug("Room description length: " + description.length());
                         if (description.contains("\u001b[31m") || description.contains("\u001b[32m")) {
                             this.debug("Found color codes in description");
                         }
-
-                        // Parse whereami for coordinates (bcproxy feature)
                         Room.WhereamiResult w = Room.parseWhereami(description);
                         if (w != null) {
                             this.debug("Whereami: continent=" + w.continent + " (" + w.x + "," + w.y + ")");
@@ -71,7 +62,7 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             this.roomRecorder = new RoomRecorder(this.onRoomChange);
             this.getPluginManager().addProtocolListener(this.roomRecorder);
 
-            this.debug("Bata loaded.");
+            this.debug("Bata loaded (PostgreSQL).");
         } catch (Exception e) {
             this.debug("Failed to load plugin Bata:");
             this.debug(e.toString());
@@ -91,9 +82,9 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
     @Override
     public String trigger(String input) {
         if (input.startsWith("?room ")) {
-            String searchFor = input.substring(6);
+            String searchFor = input.substring(6).trim();
             if (searchFor.isEmpty()) {
-                this.debug("empty input for room search");
+                return "Usage: ?room <name>";
             }
 
             List<Map<String, String>> found = roomDao.searchByShort(searchFor);
@@ -102,34 +93,61 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             }
 
             found.forEach(row -> {
-                this.getClientGUI().printText("generic", String.format("- %s (%s)\n", row.get("name"), row.get("area")));
-            });
+                String name = row.get("name");
+                String area = row.get("area");
+                String continent = row.get("continent");
+                String x = row.get("x");
+                String y = row.get("y");
+                String exits = row.get("exits");
+                boolean indoor = "true".equals(row.get("is_indoor"));
 
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.format("- %s (%s)", name, area));
+                if (continent != null && !continent.isEmpty()) {
+                    sb.append(String.format(" [%s]", continent));
+                }
+                if (!"0".equals(x) || !"0".equals(y)) {
+                    sb.append(String.format(" (%s,%s)", x, y));
+                }
+                sb.append(indoor ? " 室内" : " 室外");
+                if (exits != null && !exits.isEmpty()) {
+                    sb.append(" 出口:").append(exits);
+                }
+                sb.append("\n");
+                this.getClientGUI().printText("generic", sb.toString());
+            });
             return "";
         }
 
         if (input.startsWith("?mob ")) {
-            String searchFor = input.substring(5);
+            String searchFor = input.substring(5).trim();
             if (searchFor.isEmpty()) {
-                this.debug("empty input for mob search");
+                return "Usage: ?mob <name>";
             }
 
-            List<Map<String, Object>> found = this.jdbi.withHandle(handle ->
-                handle.createQuery("SELECT long_name, is_aggro FROM mobs WHERE LOWER(long_name) LIKE :searchFor LIMIT 16")
-                    .bind("searchFor", String.format("%%%s%%", searchFor.toLowerCase()))
-                    .mapToMap()
-                    .list()
-            );
-
+            List<Map<String, String>> found = mobDao.searchByShort(searchFor);
             if (found.isEmpty()) {
                 return "shrug";
             }
 
             found.forEach(row -> {
-                String color = "1".equals(String.valueOf(row.get("is_aggro"))) ? "红" : "绿";
-                this.getClientGUI().printText("generic", String.format("- %s (%s)\n", row.get("long_name"), color));
-            });
+                String longName = row.get("long_name");
+                String aggro = row.get("is_aggro");
+                String roomName = row.get("room_name");
+                String area = row.get("area");
+                String color = "1".equals(aggro) ? "[红]" : "[绿]";
 
+                StringBuilder sb = new StringBuilder();
+                sb.append(String.format("- %s %s", longName, color));
+                if (roomName != null && !roomName.isEmpty()) {
+                    sb.append(String.format(" @ %s", roomName));
+                    if (area != null && !area.isEmpty()) {
+                        sb.append(String.format(" (%s)", area));
+                    }
+                }
+                sb.append("\n");
+                this.getClientGUI().printText("generic", sb.toString());
+            });
             return "";
         }
 
@@ -141,7 +159,7 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             }
             try {
                 LogImporter.LogImportStats stats;
-                if (Files.isDirectory(Paths.get(path))) {
+                if (java.nio.file.Files.isDirectory(java.nio.file.Paths.get(path))) {
                     stats = logImporter.importDirectory(path);
                 } else {
                     stats = logImporter.importFile(path);
@@ -156,14 +174,6 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
         return null;
     }
 
-    private String getSqliteDbFile() throws IOException {
-        String home = System.getProperty("user.home");
-        this.debug(home);
-        String dataDir = String.format("%s/batclient/data", home);
-        Files.createDirectories(Paths.get(dataDir));
-        return Paths.get(dataDir, "bata.db").toString();
-    }
-
     private void initDb() {
         this.jdbi.withHandle(handle -> {
             handle.execute("CREATE TABLE IF NOT EXISTS rooms (\n" +
@@ -173,18 +183,18 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
                     "    description TEXT,\n" +
                     "    exits TEXT,\n" +
                     "    last_move_dir TEXT,\n" +
-                    "    is_indoor BOOLEAN,\n" +
+                    "    is_indoor BOOLEAN DEFAULT FALSE,\n" +
                     "    continent TEXT,\n" +
                     "    x INTEGER DEFAULT 0,\n" +
                     "    y INTEGER DEFAULT 0\n" +
-                    ");\n");
+                    ")");
 
             handle.execute("CREATE TABLE IF NOT EXISTS mobs (\n" +
                     "    id TEXT,\n" +
                     "    long_name TEXT,\n" +
-                    "    is_aggro INTEGER,\n" +
+                    "    is_aggro INTEGER DEFAULT 0,\n" +
                     "    PRIMARY KEY (id, long_name)\n" +
-                    ");\n");
+                    ")");
 
             return null;
         });

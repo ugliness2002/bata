@@ -50,6 +50,10 @@ public class Room {
     public static Room fromFrame(String frame) {
         String[] parts = frame.split(";;", -1);
 
+        if (parts.length < MapperFrameIndex.values().length) {
+            return null;  // frame too short, skip
+        }
+
         if (!parts[MapperFrameIndex.HEAD.ordinal()].equals("BAT_MAPPER")) {
             return null;
         }
