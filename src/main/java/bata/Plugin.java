@@ -9,16 +9,16 @@ import bata.dao.MobDao;
 import com.mythicscape.batclient.interfaces.*;
 import org.jdbi.v3.core.Jdbi;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.function.Consumer;
 
 public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, BatClientPluginCommandTrigger  {
-    // PostgreSQL connection — matches docker/compose.yml
-    private static final String PG_URL = "jdbc:postgresql://localhost:54433/bata";
-    private static final String PG_USER = "bata";
-    private static final String PG_PASS = "bata";
-
     private RoomRecorder roomRecorder;
     private Consumer<Room> onRoomChange;
     private Jdbi jdbi;
@@ -31,9 +31,13 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
     @Override
     public void loadPlugin() {
         try {
-            this.debug("Connecting to PostgreSQL: " + PG_URL);
+            // Load PostgreSQL driver explicitly (avoids META-INF/services conflict)
+            Class.forName("org.postgresql.Driver");
 
-            this.jdbi = Jdbi.create(PG_URL, PG_USER, PG_PASS);
+            String dbUrl = getDbUrl();
+            this.debug("DB: " + dbUrl);
+
+            this.jdbi = Jdbi.create(dbUrl);
             this.roomDao = new RoomDao(jdbi);
             this.mobDao = new MobDao(jdbi);
             this.mobRecorder = new MobRecorder(mobDao);
@@ -44,15 +48,11 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             this.onRoomChange = room -> {
                 if (room != null) {
                     roomDao.upsertRoom(room);
-                    this.debug("Room changed: " + room.getName());
                     String description = room.getDescription();
                     if (description != null && !description.isEmpty()) {
-                        if (description.contains("\u001b[31m") || description.contains("\u001b[32m")) {
-                            this.debug("Found color codes in description");
-                        }
                         Room.WhereamiResult w = Room.parseWhereami(description);
                         if (w != null) {
-                            this.debug("Whereami: continent=" + w.continent + " (" + w.x + "," + w.y + ")");
+                            this.debug("Whereami: " + w.continent + " (" + w.x + "," + w.y + ")");
                         }
                     }
                     mobRecorder.recordMobs(room.getDescription(), room);
@@ -62,11 +62,43 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             this.roomRecorder = new RoomRecorder(this.onRoomChange);
             this.getPluginManager().addProtocolListener(this.roomRecorder);
 
-            this.debug("Bata loaded (PostgreSQL).");
+            this.debug("Bata loaded.");
         } catch (Exception e) {
             this.debug("Failed to load plugin Bata:");
             this.debug(e.toString());
         }
+    }
+
+    /**
+     * Read DB connection from bata.properties next to the plugin jar,
+     * or from ~/batclient/bata.properties. Falls back to localhost.
+     */
+    private String getDbUrl() {
+        Properties props = new Properties();
+
+        // Try plugin dir first
+        try {
+            String jarDir = Paths.get(Plugin.class.getProtectionDomain()
+                .getCodeSource().getLocation().toURI()).getParent().toString();
+            props.load(new FileInputStream(Paths.get(jarDir, "bata.properties").toFile()));
+        } catch (Exception ignored) {}
+
+        // Try user home
+        if (props.isEmpty()) {
+            try {
+                String home = System.getProperty("user.home");
+                props.load(new FileInputStream(Paths.get(home, "batclient", "bata.properties").toFile()));
+            } catch (Exception ignored) {}
+        }
+
+        String host = props.getProperty("db.host", "localhost");
+        String port = props.getProperty("db.port", "54433");
+        String name = props.getProperty("db.name", "bata");
+        String user = props.getProperty("db.user", "bata");
+        String pass = props.getProperty("db.pass", "bata");
+
+        return String.format("jdbc:postgresql://%s:%s/%s?user=%s&password=%s",
+            host, port, name, user, pass);
     }
 
     @Override
@@ -151,7 +183,6 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             return "";
         }
 
-        // ?import command: import log files (bcproxy feature)
         if (input.startsWith("?import ")) {
             String path = input.substring(8).trim();
             if (path.isEmpty()) {
@@ -159,7 +190,7 @@ public class Plugin extends BatClientPlugin implements BatClientPluginTrigger, B
             }
             try {
                 LogImporter.LogImportStats stats;
-                if (java.nio.file.Files.isDirectory(java.nio.file.Paths.get(path))) {
+                if (Files.isDirectory(Paths.get(path))) {
                     stats = logImporter.importDirectory(path);
                 } else {
                     stats = logImporter.importFile(path);
